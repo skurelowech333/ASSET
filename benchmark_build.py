@@ -15,7 +15,7 @@ Args = vf.Arguments
 # =========================================================
 # IMPORT CYTHON GRAVITY EXTENSION
 # =========================================================
-from asset_asrl.Forces.Gravity import GravityVF
+from asset_asrl.Forces.Gravity import GravityVF as GravityVF_CY
 
 
 # =========================================================
@@ -26,20 +26,20 @@ Re = 6378137.0
 
 
 # =========================================================
-# PYTHON BASELINE GRAVITY
+# PYTHON GRAVITY
 # =========================================================
 def gravity_python(r):
     return -mu_earth * r.normalized_power3()
 
 
 # =========================================================
-# CYTHON OBJECT (BUILT ONCE)
+# CYTHON GRAVITY OBJECT
 # =========================================================
-grav_cy = GravityVF(mu_earth)
+grav_cy = GravityVF_CY(mu_earth)
 
 
 # =========================================================
-# ODE DEFINITIONS
+# ODE BASELINE (PYTHON)
 # =========================================================
 class PythonGravityODE(oc.ODEBase):
 
@@ -54,6 +54,9 @@ class PythonGravityODE(oc.ODEBase):
         super().__init__(ode, 6, 0)
 
 
+# =========================================================
+# ODE CYTHON
+# =========================================================
 class CythonGravityODE(oc.ODEBase):
 
     def __init__(self):
@@ -82,38 +85,36 @@ def orbital_period(r0):
 
 
 # =========================================================
-# TIMING UTILITIES
+# TIMING UTILITY
 # =========================================================
 def time_func(func, runs=20):
 
-    t = []
+    out = []
 
     for _ in range(runs):
-
         t0 = time.perf_counter()
         func()
         t1 = time.perf_counter()
+        out.append(t1 - t0)
 
-        t.append(t1 - t0)
-
-    return np.array(t)
+    return np.array(out)
 
 
 # =========================================================
-# BENCHMARK: ODE CONSTRUCTION
+# BENCHMARK BUILD
 # =========================================================
 def benchmark_build():
 
-    py_times = time_func(lambda: PythonGravityODE())
-    cy_times = time_func(lambda: CythonGravityODE())
+    py = time_func(lambda: PythonGravityODE())
+    cy = time_func(lambda: CythonGravityODE())
 
-    return py_times, cy_times
+    return py, cy
 
 
 # =========================================================
-# BENCHMARK: PROPAGATION
+# PROPAGATION BENCHMARK
 # =========================================================
-def benchmark_propagation(ode_class, Xt0, tf, runs=5):
+def benchmark_prop(ode_class, Xt0, tf, runs=5):
 
     times = []
     steps = []
@@ -140,67 +141,49 @@ def benchmark_propagation(ode_class, Xt0, tf, runs=5):
 # =========================================================
 if __name__ == "__main__":
 
-    # =====================================================
     # INITIAL STATE
-    # =====================================================
     X0 = circular_orbit_ic()
     Xt0 = np.hstack([X0, 0.0])
 
     r0 = np.linalg.norm(X0[:3])
     tf = 3 * orbital_period(r0)
 
-    # =====================================================
-    # WARMUP (VERY IMPORTANT)
-    # =====================================================
-    print("\nWARMUP RUN...")
+    # WARMUP
+    print("\nWARMUP...")
     _ = PythonGravityODE().integrator("DOPRI87", 20).integrate_dense(Xt0, tf)
     _ = CythonGravityODE().integrator("DOPRI87", 20).integrate_dense(Xt0, tf)
 
     # =====================================================
     # BUILD BENCHMARK
     # =====================================================
-    print("\n====================================")
-    print("ODE CONSTRUCTION BENCHMARK")
-    print("====================================")
+    print("\n==============================")
+    print("ODE BUILD")
+    print("==============================")
 
-    py_build, cy_build = benchmark_build()
+    py_b, cy_b = benchmark_build()
 
-    print("\nPython Build:")
-    print(f"  mean: {np.mean(py_build)*1e6:.2f} us")
-    print(f"  median: {np.median(py_build)*1e6:.2f} us")
-
-    print("\nCython Build:")
-    print(f"  mean: {np.mean(cy_build)*1e6:.2f} us")
-    print(f"  median: {np.median(cy_build)*1e6:.2f} us")
-
-    print("\nBuild Speedup:", np.mean(py_build)/np.mean(cy_build))
+    print(f"Python mean  : {np.mean(py_b)*1e6:.2f} us")
+    print(f"Cython mean  : {np.mean(cy_b)*1e6:.2f} us")
+    print("Speedup:", np.mean(py_b)/np.mean(cy_b))
 
 
     # =====================================================
     # PROPAGATION BENCHMARK
     # =====================================================
-    print("\n====================================")
-    print("PROPAGATION BENCHMARK")
-    print("====================================")
+    print("\n==============================")
+    print("PROPAGATION")
+    print("==============================")
 
-    py_time, py_steps = benchmark_propagation(PythonGravityODE, Xt0, tf)
-    cy_time, cy_steps = benchmark_propagation(CythonGravityODE, Xt0, tf)
+    py_t, py_s = benchmark_prop(PythonGravityODE, Xt0, tf)
+    cy_t, cy_s = benchmark_prop(CythonGravityODE, Xt0, tf)
 
-    print("\nPython:")
-    print(f"  mean time: {np.mean(py_time):.6f} s")
-    print(f"  std time : {np.std(py_time):.6f} s")
-    print(f"  steps    : {np.mean(py_steps):.1f}")
-
-    print("\nCython:")
-    print(f"  mean time: {np.mean(cy_time):.6f} s")
-    print(f"  std time : {np.std(cy_time):.6f} s")
-    print(f"  steps    : {np.mean(cy_steps):.1f}")
-
-    print("\n🚀 Propagation Speedup:", np.mean(py_time)/np.mean(cy_time))
+    print(f"Python mean time : {np.mean(py_t):.6f} s")
+    print(f"Cython mean time : {np.mean(cy_t):.6f} s")
+    print("Speedup:", np.mean(py_t)/np.mean(cy_t))
 
 
     # =====================================================
-    # TRAJECTORY COMPARISON (single run)
+    # TRAJECTORY CHECK
     # =====================================================
     py_sol = PythonGravityODE().integrator("DOPRI87", 20).integrate_dense(Xt0, tf)
     cy_sol = CythonGravityODE().integrator("DOPRI87", 20).integrate_dense(Xt0, tf)
@@ -212,28 +195,21 @@ if __name__ == "__main__":
     py_traj = py_traj[:n]
     cy_traj = cy_traj[:n]
 
-    r_err = np.linalg.norm(py_traj[:,0:3] - cy_traj[:,0:3], axis=1)
-    v_err = np.linalg.norm(py_traj[:,3:6] - cy_traj[:,3:6], axis=1)
+    r_err = np.linalg.norm(py_traj[:, :3] - cy_traj[:, :3], axis=1)
 
-    print("\n====================================")
-    print("NUMERICAL DIFFERENCE")
-    print("====================================")
-
-    print("Max Position Error :", np.max(r_err))
-    print("Mean Position Error:", np.mean(r_err))
-    print("Max Velocity Error :", np.max(v_err))
-    print("Mean Velocity Error:", np.mean(v_err))
+    print("\nMax position error:", np.max(r_err))
+    print("Mean position error:", np.mean(r_err))
 
 
     # =====================================================
-    # PLOT ERROR
+    # PLOT
     # =====================================================
     t = np.linspace(0, tf, n)
 
     plt.figure()
     plt.plot(t/3600, r_err)
     plt.yscale("log")
-    plt.title("Position Error (Python vs Cython)")
+    plt.title("Position Error: Python vs Cython Gravity")
     plt.xlabel("Time (hr)")
     plt.ylabel("Error (m)")
     plt.grid()
